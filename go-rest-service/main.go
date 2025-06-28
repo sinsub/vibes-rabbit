@@ -57,24 +57,7 @@ func initDB() {
 		log.Fatal("Error connecting to database:", err)
 	}
 
-	// Create table if it doesn't exist
-	createTable()
-
 	log.Println("Database connected successfully")
-}
-
-func createTable() {
-	query := `
-		CREATE TABLE IF NOT EXISTS messages (
-			id SERIAL PRIMARY KEY,
-			message TEXT NOT NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)
-	`
-	_, err := db.Exec(query)
-	if err != nil {
-		log.Fatal("Error creating table:", err)
-	}
 }
 
 func helloHandler(w http.ResponseWriter, r *http.Request) {
