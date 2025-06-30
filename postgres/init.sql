@@ -1,6 +1,7 @@
--- Create messages table
-CREATE TABLE IF NOT EXISTS messages (
+-- Create files table
+CREATE TABLE IF NOT EXISTS files (
     id SERIAL PRIMARY KEY,
-    message TEXT NOT NULL,
+    name TEXT NOT NULL,
+    file BYTEA NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

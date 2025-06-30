@@ -4,9 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -25,8 +29,8 @@ func main() {
 	initDB()
 
 	// Initialize router
-	http.HandleFunc("/api/v1/hello", helloHandler)
-	http.HandleFunc("/api/v1/messages", messagesHandler)
+	http.HandleFunc("/api/v1/files", filesHandler)
+	http.HandleFunc("/api/v1/files/", fileDownloadHandler)
 
 	// Start server
 	log.Printf("Server starting on port %s", port)
@@ -60,89 +64,126 @@ func initDB() {
 	log.Println("Database connected successfully")
 }
 
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-	response := map[string]string{
-		"hello": "world",
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func messagesHandler(w http.ResponseWriter, r *http.Request) {
+// POST /api/v1/files: upload a .json file with a name
+// GET  /api/v1/files: list all files (id, name, created_at)
+func filesHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case "GET":
-		getMessages(w, r)
 	case "POST":
-		createMessage(w, r)
+		uploadFile(w, r)
+	case "GET":
+		listFiles(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func getMessages(w http.ResponseWriter, _ *http.Request) {
-	rows, err := db.Query("SELECT id, message, created_at FROM messages ORDER BY created_at DESC")
+func uploadFile(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(10 << 20) // 10MB max
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
 		return
 	}
-	defer rows.Close()
-
-	var messages []map[string]interface{}
-	for rows.Next() {
-		var id int
-		var message string
-		var createdAt time.Time
-
-		err := rows.Scan(&id, &message, &createdAt)
-		if err != nil {
-			continue
-		}
-
-		messages = append(messages, map[string]interface{}{
-			"id":         id,
-			"message":    message,
-			"created_at": createdAt,
-		})
+	name := r.FormValue("name")
+	fileHeader, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "File is required", http.StatusBadRequest)
+		return
 	}
+	defer fileHeader.Close()
 
-	response := map[string]interface{}{
-		"messages": messages,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func createMessage(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Message string `json:"message"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	if name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
 		return
 	}
 
-	if request.Message == "" {
-		http.Error(w, "Message is required", http.StatusBadRequest)
+	// Only allow .json files
+	if !strings.HasSuffix(strings.ToLower(name), ".json") {
+		http.Error(w, "File name must end with .json", http.StatusBadRequest)
+		return
+	}
+
+	fileBytes, err := io.ReadAll(fileHeader)
+	if err != nil {
+		http.Error(w, "Could not read file", http.StatusInternalServerError)
 		return
 	}
 
 	var id int
-	err := db.QueryRow("INSERT INTO messages (message) VALUES ($1) RETURNING id", request.Message).Scan(&id)
+	err = db.QueryRow("INSERT INTO files (name, file) VALUES ($1, $2) RETURNING id", name, fileBytes).Scan(&id)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]any{
-		"id":      id,
-		"message": request.Message,
-		"status":  "created",
+		"id":     id,
+		"name":   name,
+		"status": "uploaded",
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
+}
+
+func listFiles(w http.ResponseWriter, _ *http.Request) {
+	rows, err := db.Query("SELECT id, name, created_at FROM files ORDER BY created_at DESC")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var files []map[string]any
+	for rows.Next() {
+		var id int
+		var name string
+		var createdAt time.Time
+		err := rows.Scan(&id, &name, &createdAt)
+		if err != nil {
+			continue
+		}
+		files = append(files, map[string]any{
+			"id":         id,
+			"name":       name,
+			"created_at": createdAt,
+		})
+	}
+	response := map[string]any{"files": files}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GET /api/v1/files/{id}: download the file
+func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Extract id from URL
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 5 {
+		http.Error(w, "Invalid file id", http.StatusBadRequest)
+		return
+	}
+	idStr := parts[4]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid file id", http.StatusBadRequest)
+		return
+	}
+
+	var name string
+	var fileBytes []byte
+	err = db.QueryRow("SELECT name, file FROM files WHERE id = $1", id).Scan(&name, &fileBytes)
+	if err == sql.ErrNoRows {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(name)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(fileBytes)
 }

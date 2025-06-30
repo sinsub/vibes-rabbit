@@ -15,20 +15,26 @@ Multi-service backend with nginx reverse proxy and PostgreSQL database.
 docker compose up --build
 
 # Test endpoints
-curl http://localhost/health                    # Nginx health
-curl http://localhost/api/v1/hello              # Hello endpoint
-curl http://localhost/api/v1/messages           # Get messages
-curl -X POST http://localhost/api/v1/messages \  # Create message
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello from API"}'
+curl http://localhost/health
+
+# Upload a JSON file
+curl -X POST http://localhost/api/v1/files \
+  -F "name=myfile.json" \
+  -F "file=@./myfile.json"
+
+# List all uploaded files
+curl http://localhost/api/v1/files
+
+# Download a file by id (replace 1 with actual id)
+curl -OJ http://localhost/api/v1/files/1
 ```
 
 ## API Endpoints
 
 - `GET /health` - Nginx health check
-- `GET /api/v1/hello` - Returns `{"hello":"world"}`
-- `GET /api/v1/messages` - Get all messages
-- `POST /api/v1/messages` - Create new message
+- `POST /api/v1/files` - Upload a JSON file (multipart form: `name`, `file`)
+- `GET /api/v1/files` - List all uploaded files
+- `GET /api/v1/files/{id}` - Download a file by id
 
 ## Stop Services
 
